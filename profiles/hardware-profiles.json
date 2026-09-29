@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "model_id": "orca-bonsai-27b",
+  "profiles": [
+    {
+      "id": "nvidia_16gb_plus",
+      "display_name": "NVIDIA · 16 GB+",
+      "vendor": "NVIDIA",
+      "min_vram_mib": 15000,
+      "max_vram_mib": null,
+      "memory_strategy": "gpu_preferred_hybrid_available",
+      "recommended_ram_bytes": 32000000000,
+      "context_preference": "stable",
+      "runtime_profile_id": "orca-bonsai-27b-uncensored-16gb-stable",
+      "fallback_profile_ids": ["orca-bonsai-27b-uncensored-12gb-stable", "orca-bonsai-27b-uncensored-cpu"],
+      "selectable_profile_ids": ["orca-bonsai-27b-uncensored-16gb-stable", "orca-bonsai-27b-uncensored-16gb-long", "orca-bonsai-27b-uncensored-16gb-max"]
+    },
+    {
+      "id": "nvidia_12gb",
+      "display_name": "NVIDIA · 12 GB class",
+      "vendor": "NVIDIA",
+      "min_vram_mib": 11000,
+      "max_vram_mib": 14999,
+      "memory_strategy": "gpu_preferred_hybrid_available",
+      "recommended_ram_bytes": 32000000000,
+      "context_preference": "stable",
+      "runtime_profile_id": "orca-bonsai-27b-uncensored-12gb-stable",
+      "fallback_profile_ids": ["orca-bonsai-27b-uncensored-12gb-safe", "orca-bonsai-27b-uncensored-cpu"],
+      "selectable_profile_ids": ["orca-bonsai-27b-uncensored-12gb-stable", "orca-bonsai-27b-uncensored-12gb-long", "orca-bonsai-27b-uncensored-12gb-max"]
+    },
+    {
+      "id": "nvidia_8gb",
+      "display_name": "NVIDIA · 8 GB class",
+      "vendor": "NVIDIA",
+      "min_vram_mib": 7500,
+      "max_vram_mib": 10999,
+      "memory_strategy": "hybrid_gpu_system_ram",
+      "recommended_ram_bytes": 32000000000,
+      "context_preference": "stable",
+      "runtime_profile_id": "orca-bonsai-27b-uncensored-8gb-stable",
+      "fallback_profile_ids": ["orca-bonsai-27b-uncensored-8gb-safe", "orca-bonsai-27b-uncensored-cpu"],
+      "selectable_profile_ids": ["orca-bonsai-27b-uncensored-8gb-stable", "orca-bonsai-27b-uncensored-8gb-long", "orca-bonsai-27b-uncensored-8gb-max"]
+    },
+    {
+      "id": "low_vram",
+      "display_name": "低 VRAM · CPU/RAM 混合",
+      "vendor": "NVIDIA",
+      "min_vram_mib": 1,
+      "max_vram_mib": 7499,
+      "memory_strategy": "cpu_ram_with_gpu_offload_if_available",
+      "recommended_ram_bytes": 32000000000,
+      "context_preference": "stable",
+      "runtime_profile_id": "orca-bonsai-27b-uncensored-low-vram",
+      "fallback_profile_ids": ["orca-bonsai-27b-uncensored-cpu"],
+      "selectable_profile_ids": ["orca-bonsai-27b-uncensored-low-vram", "orca-bonsai-27b-uncensored-cpu"]
+    },
+    {
+      "id": "cpu_only",
+      "display_name": "CPU · 系統記憶體",
+      "vendor": "ANY_NON_NVIDIA",
+      "min_vram_mib": 0,
+      "max_vram_mib": null,
+      "memory_strategy": "cpu_only",
+      "recommended_ram_bytes": 32000000000,
+      "context_preference": "stable",
+      "runtime_profile_id": "orca-bonsai-27b-uncensored-cpu",
+      "fallback_profile_ids": [],
+      "selectable_profile_ids": ["orca-bonsai-27b-uncensored-cpu"]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "manifest_url": "",
+  "manifest_channel": "stable",
+  "default_install_dir": "%LOCALAPPDATA%\\BonsaiLocal"
+}

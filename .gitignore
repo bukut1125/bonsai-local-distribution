@@ -1,0 +1,8 @@
+BonsaiSetup/bin/
+BonsaiSetup/obj/
+staging/
+dist/*
+!dist/.gitkeep
+*.user
+*.suo
+*.partial
