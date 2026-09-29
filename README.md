@@ -4,7 +4,7 @@ Windows bootstrapper for installing the existing Bonsai runtime profile and conf
 
 ## Current delivery status
 
-The Windows setup and update code, GitHub manifest, resumable downloader, model/profile configuration generator, and existing-launcher adapter are implemented locally. A friend-ready `dist\BonsaiSetup.exe` has not been emitted because `bootstrap.json` has no GitHub owner/repository URL, and this workspace has no GitHub remote.
+The Windows setup and update code, GitHub manifest, resumable downloader, model/profile configuration generator, and existing-launcher adapter are implemented locally. The public control-plane repository is `https://github.com/bukut1125/bonsai-local-distribution`; the setup executable still needs to be built and published as a release asset.
 
 The final clean-machine flow is implemented to retrieve the manifest and assets, install into `%LOCALAPPDATA%\BonsaiLocal`, write the existing launcher registry, run a loopback model/inference check, and leave the model Ready. It still needs actual GitHub publication and acceptance on a clean Windows PC. The NVIDIA 8 GB profile is a fallback-capable candidate; this computer has an RTX 5070 12 GB, so an 8 GB hardware inference claim is not made.
 
@@ -32,7 +32,7 @@ Once the GitHub repository exists, build the setup and portable ZIP from PowerSh
 ```powershell
 .\scripts\Build-Portable.ps1 `
   -LauncherSourceRoot 'C:\path\to\Hermes-LocalModels' `
-  -ManifestUrl 'https://raw.githubusercontent.com/<owner>/bonsai-local-distribution/main/manifests/stable.json'
+  -ManifestUrl 'https://raw.githubusercontent.com/bukut1125/bonsai-local-distribution/main/manifests/stable.json'
 ```
 
 The script publishes the existing WPF Control Center as a self-contained single-file `BonsaiLauncher.exe`, packages its launch/stop scripts and third-party license texts into the setup executable, and emits `dist\BonsaiSetup.exe` plus `dist\BonsaiSetup-portable.zip`. No model weight is stored in this repository. The released setup executable embeds the configured raw GitHub manifest URL; later profile/model/runtime tuning changes are read at install/update time from GitHub.
