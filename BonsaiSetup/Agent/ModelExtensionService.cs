@@ -201,6 +201,7 @@ internal sealed class ModelExtensionService : IDisposable
             ?? throw new InvalidDataException("指定 GGUF 不在該 repository 的公開檔案清單。先呼叫 inspect 並使用清單中的精確 file_name。 ");
         var sizeBytes = file["size_bytes"]?.GetValue<long>() ?? 0;
         var sha256 = file["sha256"]?.GetValue<string>() ?? "";
+        var license = inspection["license"]?.GetValue<string>() ?? "";
         if (sizeBytes <= 0 || sha256.Length != 64 || !sha256.All(Uri.IsHexDigit))
             throw new InvalidDataException("此 GGUF 沒有可用的精確大小與 LFS SHA-256，拒絕登錄。 ");
 
@@ -262,6 +263,7 @@ internal sealed class ModelExtensionService : IDisposable
             ["expected_sha256"] = sha256,
             ["source_repository"] = repoId,
             ["source_revision"] = revision,
+            ["license"] = license,
             ["weight_format"] = "GGUF",
             ["quantization"] = quantization,
             ["chat_template"] = "GGUF embedded chat template",
@@ -300,6 +302,7 @@ internal sealed class ModelExtensionService : IDisposable
             ["sha256"] = sha256,
             ["source_repository"] = repoId,
             ["source_revision"] = revision,
+            ["license"] = license,
             ["selected"] = false,
             ["started"] = false
         };
