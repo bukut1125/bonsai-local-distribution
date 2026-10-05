@@ -4,7 +4,7 @@ Windows bootstrapper for installing the existing Bonsai runtime profile and conf
 
 ## Current delivery status
 
-The Windows setup and update code, GitHub manifest, resumable downloader, model/profile configuration generator, existing-launcher adapter, and the local model-extension agent are implemented in this workspace. The public control-plane repository is `https://github.com/bukut1125/bonsai-local-distribution`; the extension implementation and updated manifest still need to be pushed, then the setup and portable ZIP rebuilt and published as release assets.
+The Windows setup and update code, GitHub manifest, resumable downloader, model/profile configuration generator, existing-launcher adapter, and local model-extension agent are pushed to the public control-plane repository, `https://github.com/bukut1125/bonsai-local-distribution`. The self-contained Setup EXE and portable ZIP are published in the [1.0.0 preview release](https://github.com/bukut1125/bonsai-local-distribution/releases/tag/v1.0.0-preview.1).
 
 The setup targets `%LOCALAPPDATA%\BonsaiLocal`, reads the current stable manifest, writes the existing launcher registry, and runs a loopback model/inference check before it reports success. The default model is the pinned Ternary Bonsai 2 27B PTQ1_0 GGUF. The clean-machine install and inference path remains unaccepted because the development computer does not have enough free space for that full installation. The NVIDIA 8 GB profile is still a candidate: this computer has an RTX 5070 12 GB, so an 8 GB hardware inference claim is not made.
 
@@ -24,7 +24,7 @@ dotnet run --project .\BonsaiSetup\BonsaiSetup.csproj -- --test-downloader
 
 `--test-manifest` checks the central manifest's model/backend/profile/asset references. `--test-downloader` seeds a 1 MiB HTTP Range prefix, resumes the pinned 18.8 MB CPU runtime, and verifies the release SHA-256.
 
-`scripts\Test-AgentMcp.ps1` drives the published setup executable over MCP stdio. It verifies initialize, tools/list, hardware/model tools, public Hugging Face GGUF search and metadata, including the repository revision, file size and LFS SHA-256. Its install call deliberately supplies an invalid context size and verifies rejection before weight download or registry write. It does not download a model or start inference.
+`scripts\Test-AgentMcp.ps1` drives the published setup executable over MCP stdio. It verifies the legacy initialize flow and current 2026-07-28 discovery flow, tools/list, hardware/model tools, public Hugging Face GGUF search and metadata, including repository revision, file size and LFS SHA-256. Its install call deliberately supplies an invalid context size and verifies rejection before weight download or registry write. It does not download a model or start inference.
 
 `scripts\Test-PortableLauncherPreflight.ps1` stages the existing launcher scripts under a temporary install root, uses directory junctions for the already installed model/runtime, and invokes only the runtime's device-list preflight. It does not load the model or start the server. The 8 GB profile fixture passed on the actual 5070 host, which proves the profile values reach the runtime command but does not prove behavior on an 8 GB GPU.
 
@@ -57,7 +57,7 @@ The Control Center's “自主接入本地 GGUF 模型” panel submits the task
 
 The agent registers downloaded models in `config\user-model-registry.json` and the launcher registry. Updates merge those local entries back after refreshing the GitHub-controlled defaults. Registration means the weight file passed size/hash checks and the model/profile are present in the launcher; it does not mean the new model has started or passed inference. The user selects and starts the new profile in the Control Center.
 
-An external MCP-compatible agent can use the same local integration API by launching `BonsaiSetup.exe --mcp --install-dir "<BonsaiLocal>"` as an stdio MCP server. `BonsaiSetup.exe --agent-task "<request>" --install-dir "<BonsaiLocal>"` runs the built-in local Bonsai agent non-interactively. Both entry points expose only metadata search/inspection and typed GGUF registration tools.
+An external MCP-compatible agent can use the same local integration API by launching `BonsaiSetup.exe --mcp --install-dir "<BonsaiLocal>"` as an stdio MCP server. It supports the 2026-07-28 stateless protocol and legacy initialize clients. `BonsaiSetup.exe --agent-task "<request>" --install-dir "<BonsaiLocal>"` runs the built-in local Bonsai agent non-interactively. Both entry points expose only metadata search/inspection and typed GGUF registration tools.
 
 ## Delivery acceptance
 
@@ -65,7 +65,9 @@ An external MCP-compatible agent can use the same local integration API by launc
 - PASS: selector examples for 8/12/16 GB, low VRAM, CPU-only, non-NVIDIA fallback, and manual profile override.
 - PASS: manifest reference check, actual resumable CPU-runtime transfer and release digest check, and PowerShell 5.1 syntax parsing for the packaged launcher scripts.
 - PASS: portable registry/device-list preflight on the installed RTX 5070 host, without starting inference.
-- USER-PENDING: updated extension source/manifest push, GitHub release assets, full setup from the published release, clean-machine download of the 5.95 GB default model and installation-time inference, real Bonsai tool-call behavior, visual UI interaction, friend-side RTX 5060 8 GB inference, and complete no-development-tools Windows acceptance.
+- PASS: published raw manifest/profile URLs; packaged Setup EXE self-diagnose, selector, manifest and cached downloader SHA checks.
+- PASS: packaged Setup EXE MCP subprocess smoke across legacy and 2026-07-28 protocol flows, live Hugging Face GGUF search/inspection, and pre-download rejection of invalid profile input.
+- USER-PENDING: full setup from the published release, clean-machine download of the 5.95 GB default model and installation-time inference, real Bonsai tool-call behavior, visual UI interaction, friend-side RTX 5060 8 GB inference, and complete no-development-tools Windows acceptance.
 
 The current Bonsai artifact is the publisher's Ternary Bonsai 2 27B PTQ1_0 GGUF (Apache-2.0), with the existing OrcaRouter LoRA adapter (Apache-2.0); this is not a conventional Q4 GGUF. The Windows runtime is pinned to the PrismML `b10709-9a9394a` build (MIT), which supports the model's PTQ1_0 and Prism Hadamard backend requirements. The 8 GB layer/context values are centralized in `manifests/stable.json` and remain candidates until an actual 8 GB inference result exists.
 
