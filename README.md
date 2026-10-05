@@ -34,7 +34,7 @@ Build the setup and portable ZIP from PowerShell 7:
 
 ```powershell
 .\scripts\Build-Portable.ps1 `
-  -LauncherSourceRoot 'C:\Users\user\整體資料庫\代理開發專案\無審查代理的開發專案\Hermes-LocalModels' `
+  -LauncherSourceRoot 'C:\path\to\Hermes-LocalModels' `
   -ManifestUrl 'https://raw.githubusercontent.com/bukut1125/bonsai-local-distribution/main/manifests/stable.json'
 ```
 
