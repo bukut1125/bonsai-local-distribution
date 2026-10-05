@@ -15,6 +15,7 @@ internal sealed class DistributionManifest
     [JsonPropertyName("disk_reserve_bytes")] public long DiskReserveBytes { get; init; }
     [JsonPropertyName("assets")] public List<DownloadAsset> Assets { get; init; } = [];
     [JsonPropertyName("hardware_profiles_url")] public string HardwareProfilesUrl { get; init; } = "";
+    [JsonPropertyName("model_extension")] public JsonObject ModelExtension { get; init; } = new();
     [JsonIgnore] public ProfileCatalog HardwareProfiles { get; private set; } = new();
     [JsonPropertyName("model_registry")] public JsonObject ModelRegistry { get; init; } = new();
     [JsonPropertyName("local_runtime")] public JsonObject LocalRuntime { get; init; } = new();
@@ -30,7 +31,8 @@ internal sealed class DistributionManifest
         manifest.HardwareProfiles = JsonSerializer.Deserialize<ProfileCatalog>(hardwareProfilesJson, JsonOptions)
                                    ?? throw new InvalidDataException("GitHub hardware profile JSON 為空或無法解析。");
         if (manifest.HardwareProfiles.SchemaVersion != 1 || manifest.HardwareProfiles.Profiles.Count == 0) throw new InvalidDataException("GitHub manifest hardware_profiles 無效。");
-        if (manifest.ModelRegistry.Count == 0 || manifest.LocalRuntime.Count == 0) throw new InvalidDataException("GitHub manifest 缺少 launcher 配置。");
+        if (manifest.ModelRegistry.Count == 0 || manifest.LocalRuntime.Count == 0 || manifest.ModelExtension.Count == 0) throw new InvalidDataException("GitHub manifest 缺少 launcher 配置。");
+        manifest.ValidateModelExtension();
         if (!manifest.ModelRegistry.TryGetPropertyValue("profiles", out var profiles) || profiles is not JsonArray { Count: > 0 })
             throw new InvalidDataException("GitHub manifest model_registry.profiles 不可為空。");
         if (!manifest.ModelRegistry.TryGetPropertyValue("endpoint", out var endpoint) || endpoint?["host"]?.GetValue<string>() != "127.0.0.1")
@@ -42,6 +44,45 @@ internal sealed class DistributionManifest
         foreach (var asset in manifest.Assets) asset.Validate();
         manifest.ValidateReferences();
         return manifest;
+    }
+
+    private void ValidateModelExtension()
+    {
+        if (ModelExtension["schema_version"]?.GetValue<int>() != 1) throw new InvalidDataException("model_extension schema_version 不支援。");
+        if (ReadString(ModelExtension, "weight_format") != "GGUF") throw new InvalidDataException("目前 model_extension 只支援 GGUF。");
+        var searchLimit = ModelExtension["search_result_limit"]?.GetValue<int>() ?? 0;
+        var reserveBytes = ModelExtension["download_disk_reserve_bytes"]?.GetValue<long>() ?? -1;
+        if (searchLimit is < 1 or > 20 || reserveBytes < 0) throw new InvalidDataException("model_extension 搜尋數或磁碟保留值無效。");
+        var profilePolicy = ModelExtension["profiles"] as JsonObject ?? throw new InvalidDataException("model_extension.profiles 缺少設定。");
+        var minimumContext = profilePolicy["minimum_context_size"]?.GetValue<int>() ?? 0;
+        var maximumContext = profilePolicy["maximum_context_size"]?.GetValue<int>() ?? 0;
+        if (minimumContext < 1024 || maximumContext < minimumContext) throw new InvalidDataException("model_extension context bounds 無效。");
+        foreach (var mode in new[] { "gpu", "cpu" })
+        {
+            var profile = profilePolicy[mode] as JsonObject ?? throw new InvalidDataException($"model_extension.profiles.{mode} 缺少設定。");
+            var context = profile["default_context_size"]?.GetValue<int>() ?? 0;
+            var batch = profile["batch_size"]?.GetValue<int>() ?? 0;
+            var ubatch = profile["ubatch_size"]?.GetValue<int>() ?? 0;
+            var minimumVram = profile["min_vram_mib"]?.GetValue<int>() ?? -1;
+            var minimumFreeVram = profile["min_free_vram_mib"]?.GetValue<int>() ?? -1;
+            var minimumFreeRam = profile["min_free_ram_mib"]?.GetValue<int>() ?? -1;
+            if (context < minimumContext || context > maximumContext || batch <= 0 || ubatch <= 0)
+                throw new InvalidDataException($"model_extension.profiles.{mode} 數值無效。");
+            if (minimumVram < 0 || minimumFreeVram < 0 || minimumFreeRam < 0)
+                throw new InvalidDataException($"model_extension.profiles.{mode} hardware requirements are invalid.");
+            _ = ReadString(profile, "gpu_layers");
+            _ = ReadString(profile, "cache_type_k");
+            _ = ReadString(profile, "cache_type_v");
+            _ = ReadString(profile, "backend_device_pattern");
+            _ = profile["kv_offload"]?.GetValue<bool>() ?? throw new InvalidDataException($"model_extension.profiles.{mode}.kv_offload is missing.");
+            _ = profile["flash_attention"]?.GetValue<bool>() ?? throw new InvalidDataException($"model_extension.profiles.{mode}.flash_attention is missing.");
+        }
+        var agent = ModelExtension["agent"] as JsonObject ?? throw new InvalidDataException("model_extension.agent 缺少設定。");
+        if ((agent["max_rounds"]?.GetValue<int>() ?? 0) is < 1 or > 20
+            || (agent["max_tool_calls"]?.GetValue<int>() ?? 0) is < 1 or > 40
+            || (agent["max_completion_tokens"]?.GetValue<int>() ?? 0) is < 128 or > 16384)
+            throw new InvalidDataException("model_extension.agent iteration/token bounds 無效。");
+        _ = ReadString(agent, "system_prompt");
     }
 
     private void ValidateReferences()

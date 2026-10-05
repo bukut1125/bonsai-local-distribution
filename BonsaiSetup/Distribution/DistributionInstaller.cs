@@ -43,6 +43,7 @@ internal sealed class DistributionInstaller : IDisposable
         if (RequiredString(runtimeProfile, "model_id") != modelId)
             throw new InvalidDataException($"Runtime profile {runtimeProfileId} 不屬於 model {modelId}。");
         FilterRuntimeProfiles(registry, hardwareSelection, runtimeProfileId);
+        MergeUserModelCatalog(root, registry);
 
         var (assets, fallbackAssets, backend) = ResolveAssets(manifest, registry, model, runtimeProfile, hardwareSelection.FallbackProfileIds);
         var spaceAssets = assets.Concat(fallbackAssets).DistinctBy(asset => asset.Id, StringComparer.Ordinal).ToArray();
@@ -105,6 +106,7 @@ internal sealed class DistributionInstaller : IDisposable
         WriteJsonFile(Path.Combine(root, "config", "hardware.json"), JsonSerializer.SerializeToNode(hardware, JsonOptions)!);
         WriteJsonFile(Path.Combine(root, "config", "model.json"), AddInstallPath(model, modelRoot));
         WriteJsonFile(Path.Combine(root, "config", "runtime.json"), AddRuntimeSelection(runtimeProfile, backend, downloadedAssetPaths));
+        WriteJsonFile(Path.Combine(root, "config", "model-extension.json"), manifest.ModelExtension);
         WriteJsonFile(Path.Combine(root, "config", "distribution.json"), new JsonObject
         {
             ["schema_version"] = 1,
@@ -312,6 +314,61 @@ internal sealed class DistributionInstaller : IDisposable
         if (!filtered.OfType<JsonObject>().Any(profile => RequiredString(profile, "id") == selectedRuntimeProfileId))
             throw new InvalidDataException($"Selected runtime profile {selectedRuntimeProfileId} was removed from the hardware profile set.");
         registry["profiles"] = filtered;
+    }
+
+    internal static void MergeUserModelCatalog(string installRoot, JsonObject registry)
+    {
+        var catalogPath = Path.Combine(installRoot, "config", "user-model-registry.json");
+        if (!File.Exists(catalogPath)) return;
+
+        var catalog = JsonNode.Parse(File.ReadAllText(catalogPath)) as JsonObject
+                      ?? throw new InvalidDataException("config/user-model-registry.json 無法解析。");
+        MergeUserModelCatalog(catalog, registry);
+    }
+
+    internal static void MergeUserModelCatalog(JsonObject catalog, JsonObject registry)
+    {
+        if (catalog["schema_version"]?.GetValue<int>() != 1)
+            throw new InvalidDataException("不支援的 user-model-registry schema_version。");
+        var userModels = catalog["models"] as JsonArray ?? throw new InvalidDataException("user-model-registry.models 必須是陣列。");
+        var userProfiles = catalog["profiles"] as JsonArray ?? throw new InvalidDataException("user-model-registry.profiles 必須是陣列。");
+        var models = RequiredArray(registry, "models");
+        var backends = RequiredArray(registry, "backends");
+        var profiles = RequiredArray(registry, "profiles");
+        var modelIds = models.OfType<JsonObject>().Select(item => RequiredString(item, "id")).ToHashSet(StringComparer.Ordinal);
+        var profileIds = profiles.OfType<JsonObject>().Select(item => RequiredString(item, "id")).ToHashSet(StringComparer.Ordinal);
+        var modelById = models.OfType<JsonObject>().ToDictionary(item => RequiredString(item, "id"), StringComparer.Ordinal);
+        var backendById = backends.OfType<JsonObject>().ToDictionary(item => RequiredString(item, "id"), StringComparer.Ordinal);
+
+        foreach (var userModel in userModels.OfType<JsonObject>())
+        {
+            var id = RequiredString(userModel, "id");
+            if (!id.StartsWith("user-", StringComparison.Ordinal)) throw new InvalidDataException($"使用者模型 id 必須以 user- 開頭：{id}");
+            if (modelIds.Contains(id)) continue;
+            var requiredCapabilities = userModel["required_capabilities"] as JsonArray ?? [];
+            if (requiredCapabilities.Count == 0 || requiredCapabilities.Any(item => item?.GetValue<string>() != "gguf"))
+                throw new InvalidDataException($"目前的本機擴展 API 只接受 GGUF capability：{id}");
+            models.Add(userModel.DeepClone());
+            modelIds.Add(id);
+            modelById[id] = userModel;
+        }
+
+        foreach (var userProfile in userProfiles.OfType<JsonObject>())
+        {
+            var id = RequiredString(userProfile, "id");
+            if (!id.StartsWith("user-", StringComparison.Ordinal)) throw new InvalidDataException($"使用者 profile id 必須以 user- 開頭：{id}");
+            if (profileIds.Contains(id)) continue;
+            var modelId = RequiredString(userProfile, "model_id");
+            var backendId = RequiredString(userProfile, "backend_id");
+            if (!modelById.TryGetValue(modelId, out var model)) throw new InvalidDataException($"使用者 profile {id} references unknown model {modelId}.");
+            if (!backendById.TryGetValue(backendId, out var backend)) throw new InvalidDataException($"使用者 profile {id} references unknown backend {backendId}.");
+            var requiredCapabilities = model["required_capabilities"] as JsonArray ?? [];
+            var providedCapabilities = backend["capabilities"] as JsonArray ?? [];
+            if (requiredCapabilities.Any(required => !providedCapabilities.Any(provided => string.Equals(required?.GetValue<string>(), provided?.GetValue<string>(), StringComparison.Ordinal))))
+                throw new InvalidDataException($"Backend {backendId} 不符合 user model {modelId} 的 required capabilities。");
+            profiles.Add(userProfile.DeepClone());
+            profileIds.Add(id);
+        }
     }
 
     private static (List<DownloadAsset> Assets, List<DownloadAsset> FallbackAssets, JsonObject Backend) ResolveAssets(

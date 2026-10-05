@@ -4,6 +4,50 @@
   "channel": "stable",
   "hardware_profiles_url": "../profiles/hardware-profiles.json",
   "disk_reserve_bytes": 1000000000,
+  "model_extension": {
+    "schema_version": 1,
+    "weight_format": "GGUF",
+    "search_result_limit": 10,
+    "download_disk_reserve_bytes": 1000000000,
+    "profiles": {
+      "minimum_context_size": 2048,
+      "maximum_context_size": 131072,
+      "gpu": {
+        "default_context_size": 8192,
+        "gpu_layers": "all",
+        "cache_type_k": "q4_0",
+        "cache_type_v": "q4_0",
+        "kv_offload": true,
+        "batch_size": 128,
+        "ubatch_size": 128,
+        "flash_attention": true,
+        "min_vram_mib": 2048,
+        "min_free_vram_mib": 1024,
+        "min_free_ram_mib": 4096,
+        "backend_device_pattern": "NVIDIA|CUDA"
+      },
+      "cpu": {
+        "default_context_size": 4096,
+        "gpu_layers": "0",
+        "cache_type_k": "q4_0",
+        "cache_type_v": "q4_0",
+        "kv_offload": false,
+        "batch_size": 32,
+        "ubatch_size": 32,
+        "flash_attention": false,
+        "min_vram_mib": 0,
+        "min_free_vram_mib": 0,
+        "min_free_ram_mib": 4096,
+        "backend_device_pattern": ""
+      }
+    },
+    "agent": {
+      "max_rounds": 8,
+      "max_tool_calls": 16,
+      "max_completion_tokens": 4096,
+      "system_prompt": "You are the Bonsai local model integration agent. Use only Bonsai model tools to inspect hardware and public Hugging Face GGUF metadata, then install at most one suitable model when its exact source revision, file size, and SHA-256 are available. Send only concise model-related keywords to public Hugging Face search; never include private user data or the full task prompt. Never execute shell commands or modify application code. Report a model as registered only after the downloader verifies its SHA-256. Registration does not mean the model was started or inference-tested."
+    }
+  },
   "assets": [
     {
       "id": "prism_cuda",

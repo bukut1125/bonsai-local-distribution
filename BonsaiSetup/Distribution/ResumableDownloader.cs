@@ -11,7 +11,7 @@ internal sealed class ResumableDownloader : IDisposable
         Timeout = Timeout.InfiniteTimeSpan
     };
 
-    public async Task DownloadAsync(DownloadAsset asset, string destinationPath, CancellationToken cancellationToken, bool existingVerifiedByReceipt = false)
+    public async Task DownloadAsync(DownloadAsset asset, string destinationPath, CancellationToken cancellationToken, bool existingVerifiedByReceipt = false, Action<long, long>? progress = null)
     {
         asset.Validate();
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
@@ -49,7 +49,7 @@ internal sealed class ResumableDownloader : IDisposable
         {
             try
             {
-                await DownloadPartialAsync(asset, partialPath, cancellationToken).ConfigureAwait(false);
+                await DownloadPartialAsync(asset, partialPath, cancellationToken, progress).ConfigureAwait(false);
                 var actualLength = new FileInfo(partialPath).Length;
                 if (actualLength != asset.SizeBytes) throw new IOException($"{asset.Id} 位元組數不符：{actualLength} / {asset.SizeBytes}");
                 var actualHash = await ComputeSha256Async(partialPath, cancellationToken).ConfigureAwait(false);
@@ -78,7 +78,7 @@ internal sealed class ResumableDownloader : IDisposable
         throw new IOException($"下載失敗：{asset.Id}");
     }
 
-    private async Task DownloadPartialAsync(DownloadAsset asset, string partialPath, CancellationToken cancellationToken)
+    private async Task DownloadPartialAsync(DownloadAsset asset, string partialPath, CancellationToken cancellationToken, Action<long, long>? progress)
     {
         var offset = File.Exists(partialPath) ? new FileInfo(partialPath).Length : 0;
         if (offset > asset.SizeBytes)
@@ -95,7 +95,7 @@ internal sealed class ResumableDownloader : IDisposable
         if (offset > 0 && response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
         {
             File.Delete(partialPath);
-            await DownloadPartialAsync(asset, partialPath, cancellationToken).ConfigureAwait(false);
+            await DownloadPartialAsync(asset, partialPath, cancellationToken, progress).ConfigureAwait(false);
             return;
         }
 
@@ -133,11 +133,13 @@ internal sealed class ResumableDownloader : IDisposable
             {
                 var percent = Math.Min(100d, transferred * 100d / Math.Max(asset.SizeBytes, 1));
                 Console.Write($"\r正在下載 {asset.Id}：{FormatBytes(transferred)} / {FormatBytes(asset.SizeBytes)} · {percent:0}%   ");
+                progress?.Invoke(transferred, asset.SizeBytes);
                 lastReport = DateTimeOffset.UtcNow;
             }
         }
         await target.FlushAsync(cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"\r下載完成 {asset.Id}：{FormatBytes(transferred)} / {FormatBytes(asset.SizeBytes)} · 100%     ");
+        progress?.Invoke(transferred, asset.SizeBytes);
         if (transferred != asset.SizeBytes) throw new IOException($"{asset.Id} 下載大小不符：{transferred} / {asset.SizeBytes}");
     }
 

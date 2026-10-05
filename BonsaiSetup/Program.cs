@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Net;
 using System.Net.Http.Headers;
+using BonsaiSetup.Agent;
 using BonsaiSetup.Distribution;
 using BonsaiSetup.Hardware;
 using BonsaiSetup.Profiles;
@@ -37,6 +38,15 @@ internal static class Program
             if (options.TestDownloader)
             {
                 return await ValidateResumableDownloaderAsync().ConfigureAwait(false);
+            }
+
+            if (options.McpServer || options.AgentTask is not null)
+            {
+                if (string.IsNullOrWhiteSpace(options.InstallDirectory))
+                    throw new ArgumentException("--mcp 與 --agent-task 必須搭配 --install-dir <BonsaiLocal>。");
+                var root = Path.GetFullPath(options.InstallDirectory);
+                if (options.McpServer) return await new McpServer(root).RunAsync(CancellationToken.None).ConfigureAwait(false);
+                return await BonsaiAgentTaskRunner.RunAsync(root, options.AgentTask!, CancellationToken.None).ConfigureAwait(false);
             }
 
             if (options.Diagnose && options.Update)
@@ -105,7 +115,7 @@ internal static class Program
             }
 
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or HttpRequestException or TimeoutException or OperationCanceledException)
+        catch (Exception exception) when (exception is ArgumentException or InvalidDataException or IOException or UnauthorizedAccessException or InvalidOperationException or HttpRequestException or TimeoutException or OperationCanceledException or JsonException)
         {
             Console.Error.WriteLine("BonsaiSetup: " + exception.Message);
             return 1;
@@ -150,7 +160,29 @@ internal static class Program
                 var filteredProfiles = filteredRegistry["profiles"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()).ToArray();
                 if (filteredProfiles.Length > 6 || filteredProfiles.Any(id => id.Contains("12gb-long", StringComparison.Ordinal) || id.Contains("16gb-max", StringComparison.Ordinal)))
                     throw new InvalidDataException("8 GB launcher registry exposes profiles from incompatible hardware classes.");
-                Console.WriteLine($"PASS · manifest {manifest.Version} · {manifest.Assets.Count} assets · {models} models · {backends} backends · {profiles} runtime profiles · {manifest.HardwareProfiles.Profiles.Count} hardware profiles · 8 GB launcher menu filtered to {filteredProfiles.Length} options");
+                var userCatalogFixture = new JsonObject
+                {
+                    ["schema_version"] = 1,
+                    ["models"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "user-fixture-model",
+                        ["display_name"] = "Fixture user GGUF",
+                        ["required_capabilities"] = new JsonArray("gguf")
+                    }),
+                    ["profiles"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "user-fixture-profile",
+                        ["display_name"] = "Fixture user profile",
+                        ["model_id"] = "user-fixture-model",
+                        ["backend_id"] = "llama-prism-b10709-cuda"
+                    })
+                };
+                DistributionInstaller.MergeUserModelCatalog(userCatalogFixture, filteredRegistry);
+                var mergedModelIds = filteredRegistry["models"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()).ToArray();
+                var mergedProfileIds = filteredRegistry["profiles"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()).ToArray();
+                if (!mergedModelIds.Contains("user-fixture-model", StringComparer.Ordinal) || !mergedProfileIds.Contains("user-fixture-profile", StringComparer.Ordinal))
+                    throw new InvalidDataException("User model catalog entries were not preserved after hardware-profile filtering.");
+                Console.WriteLine($"PASS · manifest {manifest.Version} · {manifest.Assets.Count} assets · {models} models · {backends} backends · {profiles} runtime profiles · {manifest.HardwareProfiles.Profiles.Count} hardware profiles · 8 GB menu={filteredProfiles.Length} profiles · user model/profile retained through update merge");
                 return 0;
             }
             directory = directory.Parent;
@@ -234,6 +266,8 @@ internal static class Program
         Console.WriteLine("  --install-dir <path>       指定安裝路徑");
         Console.WriteLine("  --portable                 預設安裝至執行檔旁的 BonsaiLocal 資料夾");
         Console.WriteLine("  --update                   更新已安裝的 runtime/model/config");
+        Console.WriteLine("  --agent-task <text>        讓目前 Bonsai 模型透過受限模型工具接入一個 Hugging Face GGUF");
+        Console.WriteLine("  --mcp                      以 MCP stdio 介面提供本機模型接入工具");
         Console.WriteLine("  --test-selector            執行小型硬體 profile 正反例");
         Console.WriteLine("  --test-manifest            驗證本機 stable manifest 的來源關係");
         Console.WriteLine("  --test-downloader          使用小型 CPU runtime 部分檔驗證 HTTP Range 續傳與 SHA");
@@ -251,9 +285,11 @@ internal sealed class CommandLineOptions
     public bool TestDownloader { get; private set; }
     public bool ForceDxgi { get; private set; }
     public bool Update { get; private set; }
+    public bool McpServer { get; private set; }
     public string? InstallDirectory { get; private set; }
     public string? Profile { get; private set; }
     public string? Model { get; private set; }
+    public string? AgentTask { get; private set; }
     public string? OutputPath { get; private set; }
 
     public static CommandLineOptions Parse(string[] args)
@@ -276,6 +312,12 @@ internal sealed class CommandLineOptions
                     break;
                 case "--update":
                     parsed.Update = true;
+                    break;
+                case "--mcp":
+                    parsed.McpServer = true;
+                    break;
+                case "--agent-task":
+                    parsed.AgentTask = ReadValue(args, ref index, arg);
                     break;
                 case "--test-selector":
                     parsed.TestSelector = true;

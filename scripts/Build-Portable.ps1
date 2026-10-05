@@ -79,6 +79,7 @@ dotnet publish $setupProject -c $Configuration -r win-x64 --self-contained true 
 if ($LASTEXITCODE -ne 0) { throw "BonsaiSetup publish failed with exit code $LASTEXITCODE" }
 $setupExe = Join-Path $setupPublish 'BonsaiSetup.exe'
 if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) { throw "Published setup executable is missing: $setupExe" }
+& (Join-Path $projectRoot 'scripts\Test-AgentMcp.ps1') -SetupExecutable $setupExe -DistributionRoot $projectRoot
 Copy-Item -LiteralPath $setupExe -Destination (Join-Path $distDirectory 'BonsaiSetup.exe') -Force
 Copy-Item -LiteralPath $releaseBootstrap -Destination (Join-Path $zipStage 'bootstrap.json') -Force
 Copy-Item -LiteralPath $setupExe -Destination (Join-Path $zipStage 'BonsaiSetup.exe') -Force
