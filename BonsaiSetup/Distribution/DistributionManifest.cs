@@ -165,7 +165,33 @@ internal sealed class DistributionManifest
         }
         foreach (var backend in backends.OfType<JsonObject>())
         {
-            if (!assets.Contains(ReadString(backend, "asset_id"))) throw new InvalidDataException($"Backend {ReadString(backend, "id")} references an unknown asset.");
+            var backendId = ReadString(backend, "id");
+            var primaryAssetId = ReadString(backend, "asset_id");
+            var primaryAsset = Assets.SingleOrDefault(asset => asset.Id == primaryAssetId)
+                               ?? throw new InvalidDataException($"Backend {backendId} references an unknown asset.");
+            var executableDirectory = Path.GetDirectoryName(ReadString(backend, "executable_relative_path")
+                .Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(executableDirectory)
+                || !RelativePathsEqual(primaryAsset.TargetRelativePath, executableDirectory))
+                throw new InvalidDataException($"Backend {backendId} executable and primary runtime asset must share a directory.");
+
+            if (backend.TryGetPropertyValue("additional_asset_ids", out var additionalNode) && additionalNode is not JsonArray)
+                throw new InvalidDataException($"Backend {backendId} additional_asset_ids must be an array.");
+            var uniqueAssetIds = new HashSet<string>(StringComparer.Ordinal) { primaryAssetId };
+            foreach (var item in backend["additional_asset_ids"] as JsonArray ?? [])
+            {
+                var dependencyId = item?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(dependencyId) || !uniqueAssetIds.Add(dependencyId))
+                    throw new InvalidDataException($"Backend {backendId} has an empty or duplicate additional asset id.");
+                var dependency = Assets.SingleOrDefault(asset => asset.Id == dependencyId)
+                                 ?? throw new InvalidDataException($"Backend {backendId} references unknown runtime dependency {dependencyId}.");
+                if (dependency.Kind != "runtime" || dependency.Revision != ReadString(backend, "source_revision"))
+                    throw new InvalidDataException($"Backend {backendId} dependency {dependencyId} must be a runtime asset from the same revision.");
+                if (!RelativePathsEqual(primaryAsset.TargetRelativePath, dependency.TargetRelativePath))
+                    throw new InvalidDataException($"Backend {backendId} runtime dependencies must extract beside its executable.");
+                if (dependency.RequiredFiles.Count == 0)
+                    throw new InvalidDataException($"Backend {backendId} dependency {dependencyId} must declare required_files.");
+            }
         }
         foreach (var profile in profiles.OfType<JsonObject>())
         {
@@ -195,6 +221,9 @@ internal sealed class DistributionManifest
 
     private static string ReadString(JsonObject value, string property) => value[property]?.GetValue<string>()
         ?? throw new InvalidDataException($"GitHub manifest reference missing string property {property}.");
+
+    private static bool RelativePathsEqual(string left, string right)
+        => string.Equals(left.Replace('\\', '/').Trim('/'), right.Replace('\\', '/').Trim('/'), StringComparison.OrdinalIgnoreCase);
 
     public DownloadAsset GetAsset(string id) => Assets.SingleOrDefault(asset => asset.Id == id)
                                                      ?? throw new InvalidDataException($"GitHub manifest 缺少 asset: {id}");
@@ -226,6 +255,7 @@ internal sealed class DownloadAsset
     [JsonPropertyName("target_relative_path")] public string TargetRelativePath { get; init; } = "";
     [JsonPropertyName("archive_format")] public string ArchiveFormat { get; init; } = "none";
     [JsonPropertyName("unpacked_bytes_estimate")] public long UnpackedBytes { get; init; }
+    [JsonPropertyName("required_files")] public List<string> RequiredFiles { get; init; } = [];
     [JsonPropertyName("revision")] public string Revision { get; init; } = "";
     [JsonPropertyName("license")] public string License { get; init; } = "";
 
@@ -239,6 +269,12 @@ internal sealed class DownloadAsset
         if (string.IsNullOrWhiteSpace(TargetRelativePath)) throw new InvalidDataException($"Asset {Id} 缺少 target_relative_path。");
         if (ArchiveFormat is not ("none" or "zip")) throw new InvalidDataException($"Asset {Id} 的 archive_format 目前只支援 none/zip。");
         if (ArchiveFormat == "zip" && UnpackedBytes <= 0) throw new InvalidDataException($"ZIP asset {Id} 需要 unpacked_bytes。");
+        if (RequiredFiles.Count > 0 && ArchiveFormat != "zip") throw new InvalidDataException($"Asset {Id} required_files 只支援 ZIP asset。");
+        if (RequiredFiles.Any(file => string.IsNullOrWhiteSpace(file) || Path.IsPathRooted(file)
+                || file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || file is "." or ".."))
+            throw new InvalidDataException($"Asset {Id} required_files 必須只包含安全的檔名。");
+        if (RequiredFiles.Distinct(StringComparer.OrdinalIgnoreCase).Count() != RequiredFiles.Count)
+            throw new InvalidDataException($"Asset {Id} required_files 不可重複。");
     }
 }
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "1.0.0-preview.3",
+  "version": "1.0.0-preview.4",
   "channel": "stable",
   "hardware_profiles_url": "../profiles/hardware-profiles.json",
   "disk_reserve_bytes": 1000000000,
@@ -58,6 +58,19 @@
       "target_relative_path": "runtime/llama-prism/prism-b10709-9a9394a",
       "archive_format": "zip",
       "unpacked_bytes_estimate": 690861904,
+      "revision": "9a9394a895b96003ca842a6041cb28ac49a108f7",
+      "license": "MIT"
+    },
+    {
+      "id": "prism_cuda_runtime",
+      "kind": "runtime",
+      "url": "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10709-9a9394a/cudart-llama-bin-win-cuda-13.3-x64.zip",
+      "size_bytes": 390970417,
+      "sha256": "1462a050eb4c684921ba51dcc4cc488a036674c3e73e9945ee705b854808d03e",
+      "target_relative_path": "runtime/llama-prism/prism-b10709-9a9394a",
+      "archive_format": "zip",
+      "unpacked_bytes_estimate": 512722768,
+      "required_files": ["cublas64_13.dll", "cublasLt64_13.dll", "cudart64_13.dll"],
       "revision": "9a9394a895b96003ca842a6041cb28ac49a108f7",
       "license": "MIT"
     },
@@ -125,6 +138,7 @@
         "source_repository": "PrismML-Eng/llama.cpp",
         "source_revision": "9a9394a895b96003ca842a6041cb28ac49a108f7",
         "asset_id": "prism_cuda",
+        "additional_asset_ids": ["prism_cuda_runtime"],
         "capabilities": ["gguf", "qwen35", "cuda", "flash-attention", "jinja", "ptq1_0", "prism-hadamard", "gguf-lora"]
       },
       {

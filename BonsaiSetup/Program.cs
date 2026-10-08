@@ -165,6 +165,17 @@ internal static class Program
                 var filteredProfiles = filteredRegistry["profiles"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()).ToArray();
                 if (filteredProfiles.Length > 6 || filteredProfiles.Any(id => id.Contains("12gb-long", StringComparison.Ordinal) || id.Contains("16gb-max", StringComparison.Ordinal)))
                     throw new InvalidDataException("8 GB launcher registry exposes profiles from incompatible hardware classes.");
+                var selectedProfile = manifest.ModelRegistry["profiles"]!.AsArray().OfType<JsonObject>()
+                    .Single(profile => profile["id"]?.GetValue<string>() == eightGbSelection.RuntimeProfileId);
+                var selectedModel = manifest.ModelRegistry["models"]!.AsArray().OfType<JsonObject>()
+                    .Single(model => model["id"]?.GetValue<string>() == selectedProfile["model_id"]?.GetValue<string>());
+                var assetPlan = DistributionInstaller.ResolveAssets(
+                    manifest, manifest.ModelRegistry, selectedModel, selectedProfile, eightGbSelection.FallbackProfileIds);
+                var selectedAssetIds = assetPlan.Assets.Select(asset => asset.Id).ToHashSet(StringComparer.Ordinal);
+                if (!selectedAssetIds.Contains("prism_cuda_runtime"))
+                    throw new InvalidDataException("8 GB CUDA profile did not select the required Prism CUDA runtime DLL asset.");
+                if (assetPlan.FallbackAssets.Any(asset => asset.Id == "prism_cuda_runtime"))
+                    throw new InvalidDataException("CUDA runtime DLL asset should be shared with the selected 8 GB backend, not downloaded twice for fallback.");
                 var userCatalogFixture = new JsonObject
                 {
                     ["schema_version"] = 1,
@@ -187,7 +198,7 @@ internal static class Program
                 var mergedProfileIds = filteredRegistry["profiles"]!.AsArray().Select(item => item!["id"]!.GetValue<string>()).ToArray();
                 if (!mergedModelIds.Contains("user-fixture-model", StringComparer.Ordinal) || !mergedProfileIds.Contains("user-fixture-profile", StringComparer.Ordinal))
                     throw new InvalidDataException("User model catalog entries were not preserved after hardware-profile filtering.");
-                Console.WriteLine($"PASS · manifest {manifest.Version} · {manifest.Assets.Count} assets · {models} models · {backends} backends · {profiles} runtime profiles · {manifest.HardwareProfiles.Profiles.Count} hardware profiles · 8 GB menu={filteredProfiles.Length} profiles · user model/profile retained through update merge");
+                Console.WriteLine($"PASS · manifest {manifest.Version} · {manifest.Assets.Count} assets · {models} models · {backends} backends · {profiles} runtime profiles · {manifest.HardwareProfiles.Profiles.Count} hardware profiles · 8 GB menu={filteredProfiles.Length} profiles · CUDA runtime dependency selected · user model/profile retained through update merge");
                 return 0;
             }
             directory = directory.Parent;

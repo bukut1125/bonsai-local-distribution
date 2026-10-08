@@ -420,7 +420,7 @@ internal sealed class DistributionInstaller : IDisposable
         }
     }
 
-    private static (List<DownloadAsset> Assets, List<DownloadAsset> FallbackAssets, JsonObject Backend) ResolveAssets(
+    internal static (List<DownloadAsset> Assets, List<DownloadAsset> FallbackAssets, JsonObject Backend) ResolveAssets(
         DistributionManifest manifest,
         JsonObject registry,
         JsonObject model,
@@ -432,7 +432,7 @@ internal sealed class DistributionInstaller : IDisposable
         var fallbackNeeded = new Dictionary<string, DownloadAsset>(StringComparer.Ordinal);
         AddAsset(needed, RequiredString(model, "asset_id"));
         var selectedBackend = FindObject(RequiredArray(registry, "backends"), "id", RequiredString(runtimeProfile, "backend_id"));
-        AddAsset(needed, RequiredString(selectedBackend, "asset_id"));
+        foreach (var assetId in GetBackendAssetIds(selectedBackend)) AddAsset(needed, assetId);
 
         foreach (var adapter in OptionalArray(runtimeProfile, "adapters").OfType<JsonObject>())
         {
@@ -444,7 +444,7 @@ internal sealed class DistributionInstaller : IDisposable
             var fallback = RequiredArray(registry, "profiles").OfType<JsonObject>().FirstOrDefault(profile => RequiredString(profile, "id") == fallbackId);
             if (fallback is null) continue;
             var fallbackBackend = FindObject(RequiredArray(registry, "backends"), "id", RequiredString(fallback, "backend_id"));
-            AddAsset(fallbackNeeded, RequiredString(fallbackBackend, "asset_id"));
+            foreach (var assetId in GetBackendAssetIds(fallbackBackend)) AddAsset(fallbackNeeded, assetId);
             foreach (var adapter in OptionalArray(fallback, "adapters").OfType<JsonObject>()) AddAsset(fallbackNeeded, RequiredString(adapter, "asset_id"));
         }
 
@@ -466,15 +466,15 @@ internal sealed class DistributionInstaller : IDisposable
         Dictionary<string, DownloadAsset> installedAssets,
         CancellationToken cancellationToken)
     {
-        if (downloadedAssetPaths.TryGetValue(asset.Id, out var knownPath) && File.Exists(knownPath)) return;
+        if (downloadedAssetPaths.TryGetValue(asset.Id, out var knownPath)
+            && (asset.ArchiveFormat == "zip" ? ZipPayloadPresent(knownPath, asset) : File.Exists(knownPath))) return;
 
         var finalPath = ResolveInsideRoot(root, asset.TargetRelativePath, asset.ArchiveFormat == "zip");
         if (asset.ArchiveFormat == "zip")
         {
-            var executablePath = Path.Combine(finalPath, "llama-server.exe");
-            if (ReceiptMatches(previousReceipt, asset) && File.Exists(executablePath))
+            if (ReceiptMatches(previousReceipt, asset) && ZipPayloadPresent(finalPath, asset))
             {
-                downloadedAssetPaths[asset.Id] = executablePath;
+                downloadedAssetPaths[asset.Id] = finalPath;
             }
             else
             {
@@ -482,7 +482,9 @@ internal sealed class DistributionInstaller : IDisposable
                 await _downloader.DownloadAsync(asset, archivePath, cancellationToken).ConfigureAwait(false);
                 ExtractZipSafely(archivePath, finalPath);
                 File.Delete(archivePath);
-                downloadedAssetPaths[asset.Id] = executablePath;
+                if (!ZipPayloadPresent(finalPath, asset))
+                    throw new InvalidDataException($"Runtime asset {asset.Id} 解壓後缺少 required_files。");
+                downloadedAssetPaths[asset.Id] = finalPath;
             }
         }
         else
@@ -497,9 +499,20 @@ internal sealed class DistributionInstaller : IDisposable
 
     private static IEnumerable<string> GetProfileAssetIds(JsonObject profile, JsonObject backend)
     {
-        yield return RequiredString(backend, "asset_id");
+        foreach (var assetId in GetBackendAssetIds(backend)) yield return assetId;
         foreach (var adapter in OptionalArray(profile, "adapters").OfType<JsonObject>())
             yield return RequiredString(adapter, "asset_id");
+    }
+
+    private static IEnumerable<string> GetBackendAssetIds(JsonObject backend)
+    {
+        yield return RequiredString(backend, "asset_id");
+        foreach (var item in OptionalArray(backend, "additional_asset_ids"))
+        {
+            var assetId = item?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(assetId)) throw new InvalidDataException("Backend additional_asset_ids 包含空值。");
+            yield return assetId;
+        }
     }
 
     private static long GetLauncherPayloadBytes(out Func<Stream> openStream)
@@ -537,8 +550,15 @@ internal sealed class DistributionInstaller : IDisposable
         if (!ReceiptMatches(receipt, asset)) return false;
         var target = Path.GetFullPath(Path.Combine(root, asset.TargetRelativePath));
         EnsurePathInsideRoot(root, target);
-        if (asset.ArchiveFormat == "zip") return File.Exists(Path.Combine(target, "llama-server.exe"));
+        if (asset.ArchiveFormat == "zip") return ZipPayloadPresent(target, asset);
         return File.Exists(target) && new FileInfo(target).Length == asset.SizeBytes;
+    }
+
+    private static bool ZipPayloadPresent(string directory, DownloadAsset asset)
+    {
+        if (!Directory.Exists(directory)) return false;
+        var requiredFiles = asset.RequiredFiles.Count > 0 ? asset.RequiredFiles : ["llama-server.exe"];
+        return requiredFiles.All(file => File.Exists(Path.Combine(directory, file)));
     }
 
     private static long GetCurrentExecutableBytes()
@@ -808,7 +828,7 @@ internal sealed class DistributionInstaller : IDisposable
         result["backend_display_name"] = RequiredString(backend, "display_name");
         result["executable_relative_path"] = RequiredString(backend, "executable_relative_path");
         result["asset_id"] = RequiredString(backend, "asset_id");
-        result["backend_executable_ready"] = assetPaths.ContainsKey(RequiredString(backend, "asset_id"));
+        result["backend_executable_ready"] = GetBackendAssetIds(backend).All(assetPaths.ContainsKey);
         return result;
     }
 
