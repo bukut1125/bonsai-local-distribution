@@ -4,7 +4,7 @@ Windows bootstrapper for installing the existing Bonsai runtime profile and conf
 
 ## Current delivery status
 
-The Windows setup and update code, GitHub manifest, resumable downloader, model/profile configuration generator, existing-launcher adapter, and local model-extension agent are pushed to the public control-plane repository, `https://github.com/bukut1125/bonsai-local-distribution`. The self-contained Setup EXE and portable ZIP are published in the [1.0.0 preview release](https://github.com/bukut1125/bonsai-local-distribution/releases/tag/v1.0.0-preview.1).
+The Windows setup and update code, GitHub manifest, resumable downloader, model/profile configuration generator, existing-launcher adapter, and local model-extension agent are pushed to the public control-plane repository, `https://github.com/bukut1125/bonsai-local-distribution`. The self-contained Setup EXE and portable ZIP are published in the [1.0.0 Preview 2 release](https://github.com/bukut1125/bonsai-local-distribution/releases/tag/v1.0.0-preview.2).
 
 The setup targets `%LOCALAPPDATA%\BonsaiLocal`, reads the current stable manifest, writes the existing launcher registry, and runs a loopback model/inference check before it reports success. The default model is the pinned Ternary Bonsai 2 27B PTQ1_0 GGUF. The clean-machine install and inference path remains unaccepted because the development computer does not have enough free space for that full installation. The NVIDIA 8 GB profile is still a candidate: this computer has an RTX 5070 12 GB, so an 8 GB hardware inference claim is not made.
 
