@@ -40,6 +40,11 @@ internal static class Program
                 return await ValidateResumableDownloaderAsync().ConfigureAwait(false);
             }
 
+            if (options.TestHermes)
+            {
+                return await ValidateHermesProvisioningAsync().ConfigureAwait(false);
+            }
+
             if (options.McpServer || options.AgentTask is not null)
             {
                 if (string.IsNullOrWhiteSpace(options.InstallDirectory))
@@ -190,6 +195,45 @@ internal static class Program
         throw new FileNotFoundException("開發階段找不到 manifests/stable.json 與 profiles/hardware-profiles.json。");
     }
 
+    private static async Task<int> ValidateHermesProvisioningAsync()
+    {
+        var projectRoot = FindDistributionProjectRoot();
+        var manifest = DistributionManifest.Parse(
+            File.ReadAllText(Path.Combine(projectRoot, "manifests", "stable.json")),
+            File.ReadAllText(Path.Combine(projectRoot, "profiles", "hardware-profiles.json")));
+        if (!manifest.HermesAgent.Enabled) throw new InvalidDataException("Stable manifest does not enable Hermes Agent.");
+
+        var asset = manifest.GetAsset(manifest.HermesAgent.BootstrapAssetId);
+        var temp = Path.Combine(Path.GetTempPath(), "BonsaiHermesInstallerProbe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        var downloaded = Path.Combine(temp, "install.ps1");
+        try
+        {
+            using var downloader = new ResumableDownloader();
+            await downloader.DownloadAsync(asset, downloaded, CancellationToken.None).ConfigureAwait(false);
+            var source = await File.ReadAllTextAsync(downloaded).ConfigureAwait(false);
+            var pathFree = HermesProvisioner.CreatePathFreeInstallerScript(source);
+            var userPathWriteCount = System.Text.RegularExpressions.Regex.Matches(source, @"\[Environment\]::SetEnvironmentVariable\(\s*['""]Path['""]").Count;
+            if (userPathWriteCount != 1) throw new InvalidDataException("Pinned Hermes installer changed its user PATH write surface.");
+            if (System.Text.RegularExpressions.Regex.IsMatch(pathFree, @"(?m)^[ \t]*Set-LauncherUserPath[ \t]+\$binDir[ \t]*$"))
+                throw new InvalidDataException("Hermes installer still contains an active user PATH write call.");
+            if (System.Text.RegularExpressions.Regex.IsMatch(source, @"(?im)^\s*Start-Process.*-Verb\s+RunAs"))
+                throw new InvalidDataException("Pinned Hermes installer unexpectedly requests elevation.");
+            if (!pathFree.Contains("Bonsai: keep PATH unchanged; the launcher calls hermes.exe by absolute path.", StringComparison.Ordinal))
+                throw new InvalidDataException("Hermes installer PATH-free patch marker is missing.");
+
+            Console.WriteLine($"PASS · pinned Hermes installer {manifest.HermesAgent.SourceCommit} SHA-256 verified · no admin elevation · user PATH hook disabled · no installer executed");
+            return 0;
+        }
+        finally
+        {
+            if (File.Exists(downloaded)) File.Delete(downloaded);
+            var partial = downloaded + ".partial";
+            if (File.Exists(partial)) File.Delete(partial);
+            if (Directory.Exists(temp)) Directory.Delete(temp, recursive: false);
+        }
+    }
+
     private static async Task<int> ValidateResumableDownloaderAsync()
     {
         var projectRoot = FindDistributionProjectRoot();
@@ -271,6 +315,7 @@ internal static class Program
         Console.WriteLine("  --test-selector            執行小型硬體 profile 正反例");
         Console.WriteLine("  --test-manifest            驗證本機 stable manifest 的來源關係");
         Console.WriteLine("  --test-downloader          使用小型 CPU runtime 部分檔驗證 HTTP Range 續傳與 SHA");
+        Console.WriteLine("  --test-hermes              驗證 Hermes 固定來源雜湊與免 PATH patch；不執行安裝");
         Console.WriteLine("  --test-dxgi                強制走 DXGI GPU fallback 作唯讀探測");
     }
 }
@@ -283,6 +328,7 @@ internal sealed class CommandLineOptions
     public bool TestSelector { get; private set; }
     public bool TestManifest { get; private set; }
     public bool TestDownloader { get; private set; }
+    public bool TestHermes { get; private set; }
     public bool ForceDxgi { get; private set; }
     public bool Update { get; private set; }
     public bool McpServer { get; private set; }
@@ -327,6 +373,9 @@ internal sealed class CommandLineOptions
                     break;
                 case "--test-downloader":
                     parsed.TestDownloader = true;
+                    break;
+                case "--test-hermes":
+                    parsed.TestHermes = true;
                     break;
                 case "--test-dxgi":
                     parsed.ForceDxgi = true;

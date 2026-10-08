@@ -47,19 +47,27 @@ internal sealed class DistributionInstaller : IDisposable
 
         var (assets, fallbackAssets, backend) = ResolveAssets(manifest, registry, model, runtimeProfile, hardwareSelection.FallbackProfileIds);
         var spaceAssets = assets.Concat(fallbackAssets).DistinctBy(asset => asset.Id, StringComparer.Ordinal).ToArray();
+        var hermesProvisioner = manifest.HermesAgent.Enabled ? new HermesProvisioner(_downloader) : null;
+        var hermesPlan = hermesProvisioner is null
+            ? null
+            : await hermesProvisioner.InspectAsync(manifest.HermesAgent, root, update, cancellationToken).ConfigureAwait(false);
+        var neededBytes = CalculateRequiredBytes(root, spaceAssets, manifest.DiskReserveBytes, hermesPlan?.EstimatedBytes ?? 0);
+        while (true)
+        {
+            var selectedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(EnsureDiskSpace(root, neededBytes)));
+            if (string.Equals(selectedDirectory, root, StringComparison.OrdinalIgnoreCase)) break;
+            installDirectory = selectedDirectory;
+            root = selectedDirectory;
+            hermesPlan = hermesProvisioner is null
+                ? null
+                : await hermesProvisioner.InspectAsync(manifest.HermesAgent, root, update, cancellationToken).ConfigureAwait(false);
+            neededBytes = CalculateRequiredBytes(root, spaceAssets, manifest.DiskReserveBytes, hermesPlan?.EstimatedBytes ?? 0);
+        }
+
         var previousReceipt = ReadInstalledAssetReceipt(root);
         var installLauncherPayload = !LauncherPayloadInstalled(root);
         Func<Stream>? launcherPayloadStreamFactory = null;
         var launcherPayloadBytes = installLauncherPayload ? GetLauncherPayloadBytes(out launcherPayloadStreamFactory) : 0;
-        var assetsRequiringSpace = spaceAssets.Where(asset => !AssetAlreadyInstalled(root, asset, previousReceipt)).ToArray();
-        var neededBytes = checked(
-            assetsRequiringSpace.Sum(asset => asset.SizeBytes)
-            + assetsRequiringSpace.Where(asset => asset.ArchiveFormat == "zip").Sum(asset => asset.UnpackedBytes)
-            + launcherPayloadBytes
-            + (installLauncherPayload ? GetCurrentExecutableBytes() : 0)
-            + manifest.DiskReserveBytes);
-        installDirectory = EnsureDiskSpace(installDirectory, neededBytes);
-        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));
         EnsureRuntimeStopped(root);
 
         Console.WriteLine($"硬體 profile：{hardwareSelection.ProfileId} · {hardwareSelection.DisplayName}");
@@ -78,6 +86,19 @@ internal sealed class DistributionInstaller : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             await EnsureAssetInstalledAsync(root, asset, previousReceipt, downloadedAssetPaths, installedAssets, cancellationToken).ConfigureAwait(false);
+        }
+
+        HermesInstallationResult? hermesInstallation = null;
+        if (hermesProvisioner is not null && hermesPlan is not null)
+        {
+            hermesInstallation = await hermesProvisioner.EnsureInstalledAsync(
+                manifest,
+                root,
+                hermesPlan,
+                previousReceipt,
+                installedAssets,
+                cancellationToken).ConfigureAwait(false);
+            WriteJsonFile(Path.Combine(root, "config", "installed-assets.json"), BuildAssetReceipt(installedAssets.Values));
         }
 
         registry["canonical_model_root"] = Path.Combine(root, "models");
@@ -101,6 +122,7 @@ internal sealed class DistributionInstaller : IDisposable
         localRuntime["candidate_root"] = "runtime\\llama-prism";
         localRuntime["default_profile"] = runtimeProfileId;
         localRuntime["endpoint"] = new JsonObject { ["host"] = "127.0.0.1", ["port"] = 18080 };
+        if (hermesInstallation is not null) HermesProvisioner.ApplyToLauncherRuntime(localRuntime, hermesInstallation);
         WriteJsonFile(Path.Combine(root, "config", "local-runtime.json"), localRuntime);
 
         WriteJsonFile(Path.Combine(root, "config", "hardware.json"), JsonSerializer.SerializeToNode(hardware, JsonOptions)!);
@@ -118,11 +140,8 @@ internal sealed class DistributionInstaller : IDisposable
             ["runtime_revision"] = RequiredString(backend, "source_revision")
         });
         WriteJsonFile(Path.Combine(root, "config", "installed-assets.json"), BuildAssetReceipt(installedAssets.Values));
-        if (installLauncherPayload)
-        {
-            InstallSetupCopy(root);
-            CreateShortcuts(root);
-        }
+        InstallSetupCopy(root);
+        if (installLauncherPayload) CreateShortcuts(root);
 
         var attemptedProfiles = new List<string>();
         var candidates = new[] { runtimeProfileId }.Concat(hardwareSelection.FallbackProfileIds).Distinct(StringComparer.Ordinal).Take(3).ToArray();
@@ -179,6 +198,17 @@ internal sealed class DistributionInstaller : IDisposable
                 if (probe.Passed)
                 {
                     ready = true;
+                    if (hermesInstallation is not null)
+                    {
+                        var profileSync = await RunPowerShellAsync(root, "local\\sync-hermes-profile.ps1", [], TimeSpan.FromSeconds(120), cancellationToken).ConfigureAwait(false);
+                        if (profileSync.ExitCode != 0)
+                        {
+                            var syncError = BuildError(profileSync);
+                            WriteInstallStatus(root, "hermes_config_failed", manifest.Version, currentProfileId, update, syncError);
+                            Console.Error.WriteLine("Bonsai 模型已通過推理，但 Hermes profile/MCP 設定失敗：" + syncError);
+                            return 5;
+                        }
+                    }
                     registry["default_profile_id"] = currentProfileId;
                     WriteJsonFile(Path.Combine(root, "config", "model-registry.json"), registry);
                     localRuntime["default_profile"] = currentProfileId;
@@ -233,6 +263,25 @@ internal sealed class DistributionInstaller : IDisposable
         }
 
         return 0;
+    }
+
+    private static long CalculateRequiredBytes(
+        string root,
+        IReadOnlyCollection<DownloadAsset> spaceAssets,
+        long diskReserveBytes,
+        long hermesInstallBytes)
+    {
+        var receipt = ReadInstalledAssetReceipt(root);
+        var launcherMissing = !LauncherPayloadInstalled(root);
+        var launcherPayloadBytes = launcherMissing ? GetLauncherPayloadBytes(out _) : 0;
+        var assetsRequiringSpace = spaceAssets.Where(asset => !AssetAlreadyInstalled(root, asset, receipt)).ToArray();
+        return checked(
+            assetsRequiringSpace.Sum(asset => asset.SizeBytes)
+            + assetsRequiringSpace.Where(asset => asset.ArchiveFormat == "zip").Sum(asset => asset.UnpackedBytes)
+            + launcherPayloadBytes
+            + (launcherMissing ? GetCurrentExecutableBytes() : 0)
+            + hermesInstallBytes
+            + diskReserveBytes);
     }
 
     private static ProfileSelection SelectHardwareProfile(ProfileCatalog catalog, HardwareSnapshot hardware, JsonObject registry, string requestedProfileId)
@@ -472,7 +521,16 @@ internal sealed class DistributionInstaller : IDisposable
     private static bool LauncherPayloadInstalled(string root)
         => File.Exists(Path.Combine(root, LauncherExecutable))
            && File.Exists(Path.Combine(root, "local", "start-local-model.ps1"))
-           && File.Exists(Path.Combine(root, "local", "stop-local-model.ps1"));
+           && File.Exists(Path.Combine(root, "local", "stop-local-model.ps1"))
+           && File.Exists(Path.Combine(root, "local", "start-hermes-local.ps1"))
+           && File.Exists(Path.Combine(root, "local", "sync-hermes-profile.ps1"))
+           && File.Exists(Path.Combine(root, "local", "set-reasoning-mode.ps1"))
+           && File.Exists(Path.Combine(root, "local", "normalize-local-reasoning.ps1"))
+           && File.Exists(Path.Combine(root, "local", "test-hermes-local.ps1"))
+           && File.Exists(Path.Combine(root, "config", "hermes-local-template.yaml"))
+           && File.Exists(Path.Combine(root, "hermes", "reasoning", "orca-reasoning-policy.json"))
+           && File.Exists(Path.Combine(root, "hermes", "reasoning", "model-providers", "orca-local", "__init__.py"))
+           && File.Exists(Path.Combine(root, "hermes", "reasoning", "plugins", "orca-reasoning-scheduler", "__init__.py"));
 
     private static bool AssetAlreadyInstalled(string root, DownloadAsset asset, JsonObject? receipt)
     {
@@ -520,6 +578,9 @@ internal sealed class DistributionInstaller : IDisposable
                     Directory.CreateDirectory(destination);
                     continue;
                 }
+                var relativeDestination = Path.GetRelativePath(root, destination).Replace('\\', '/');
+                if (string.Equals(relativeDestination, "launcher/BonsaiLauncher.exe", StringComparison.OrdinalIgnoreCase)
+                    && File.Exists(destination)) continue;
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 using var input = entry.Open();
                 using var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None);

@@ -19,12 +19,13 @@ internal sealed class DistributionManifest
     [JsonIgnore] public ProfileCatalog HardwareProfiles { get; private set; } = new();
     [JsonPropertyName("model_registry")] public JsonObject ModelRegistry { get; init; } = new();
     [JsonPropertyName("local_runtime")] public JsonObject LocalRuntime { get; init; } = new();
+    [JsonPropertyName("hermes_agent")] public HermesAgentSettings HermesAgent { get; init; } = new();
 
     public static DistributionManifest Parse(string json, string hardwareProfilesJson)
     {
         var manifest = JsonSerializer.Deserialize<DistributionManifest>(json, JsonOptions)
                        ?? throw new InvalidDataException("GitHub manifest 為空或 JSON 無法解析。");
-        if (manifest.SchemaVersion != 1) throw new InvalidDataException($"不支援的 GitHub manifest schema: {manifest.SchemaVersion}");
+        if (manifest.SchemaVersion is not (1 or 2)) throw new InvalidDataException($"不支援的 GitHub manifest schema: {manifest.SchemaVersion}");
         if (string.IsNullOrWhiteSpace(manifest.Version)) throw new InvalidDataException("GitHub manifest 缺少 version。");
         if (manifest.DiskReserveBytes < 0) throw new InvalidDataException("GitHub manifest disk_reserve_bytes 不可小於零。");
         if (manifest.Assets.Count == 0) throw new InvalidDataException("GitHub manifest 沒有下載資產。");
@@ -32,6 +33,7 @@ internal sealed class DistributionManifest
                                    ?? throw new InvalidDataException("GitHub hardware profile JSON 為空或無法解析。");
         if (manifest.HardwareProfiles.SchemaVersion != 1 || manifest.HardwareProfiles.Profiles.Count == 0) throw new InvalidDataException("GitHub manifest hardware_profiles 無效。");
         if (manifest.ModelRegistry.Count == 0 || manifest.LocalRuntime.Count == 0 || manifest.ModelExtension.Count == 0) throw new InvalidDataException("GitHub manifest 缺少 launcher 配置。");
+        if (manifest.SchemaVersion >= 2) manifest.ValidateHermesAgent();
         manifest.ValidateModelExtension();
         if (!manifest.ModelRegistry.TryGetPropertyValue("profiles", out var profiles) || profiles is not JsonArray { Count: > 0 })
             throw new InvalidDataException("GitHub manifest model_registry.profiles 不可為空。");
@@ -45,6 +47,63 @@ internal sealed class DistributionManifest
         manifest.ValidateReferences();
         return manifest;
     }
+
+    private void ValidateHermesAgent()
+    {
+        if (!HermesAgent.Enabled) throw new InvalidDataException("schema 2 manifest 必須啟用 Hermes Agent。");
+        if (HermesAgent.InstallationScope != "per_user" || HermesAgent.PathPolicy != "absolute_only")
+            throw new InvalidDataException("Hermes Agent 必須使用 per_user 安裝與 absolute_only 執行路徑。");
+        if (!string.Equals(HermesAgent.SourceRepository, "NousResearch/hermes-agent", StringComparison.Ordinal))
+            throw new InvalidDataException("Hermes Agent source_repository 必須指向 NousResearch/hermes-agent。");
+        if (HermesAgent.SourceCommit.Length != 40 || !HermesAgent.SourceCommit.All(Uri.IsHexDigit))
+            throw new InvalidDataException("Hermes Agent source_commit 必須是 40 位 Git commit SHA。");
+        if (HermesAgent.EstimatedInstallBytes <= 0) throw new InvalidDataException("Hermes Agent estimated_install_bytes 必須大於零。");
+
+        var bootstrap = Assets.SingleOrDefault(asset => asset.Id == HermesAgent.BootstrapAssetId)
+                        ?? throw new InvalidDataException("Hermes Agent bootstrap_asset_id 未對應 manifest asset。");
+        if (bootstrap.Kind != "hermes-bootstrap" || bootstrap.Revision != HermesAgent.SourceCommit || bootstrap.ArchiveFormat != "none")
+            throw new InvalidDataException("Hermes Agent bootstrap asset kind/revision/format 不符合固定來源。");
+        var expectedInstallerUrl = $"https://raw.githubusercontent.com/{HermesAgent.SourceRepository}/{HermesAgent.SourceCommit}/scripts/install.ps1";
+        if (!string.Equals(bootstrap.Url, expectedInstallerUrl, StringComparison.Ordinal)
+            || !string.Equals(bootstrap.License, "MIT", StringComparison.Ordinal))
+            throw new InvalidDataException("Hermes Agent installer URL/license 未指向固定的官方來源。");
+
+        const string root = "C:\\BonsaiManifestValidation";
+        var installRoot = Path.GetFullPath(root);
+        var home = ResolveManifestRelativePath(installRoot, HermesAgent.HomeRelativePath, "Hermes Agent home_relative_path");
+        var installDirectory = ResolveManifestRelativePath(installRoot, HermesAgent.InstallDirectoryRelativePath, "Hermes Agent install_directory_relative_path");
+        var executable = ResolveManifestRelativePath(installRoot, HermesAgent.ExecutableRelativePath, "Hermes Agent executable_relative_path");
+        if (string.Equals(home, installDirectory, StringComparison.OrdinalIgnoreCase)
+            || IsPathInside(home, installDirectory)
+            || IsPathInside(installDirectory, home))
+            throw new InvalidDataException("Hermes Agent home 與 install directory 必須是互不包含的路徑。");
+        var expectedExecutable = Path.GetFullPath(Path.Combine(home, "bin", "hermes.exe"));
+        if (!string.Equals(executable, expectedExecutable, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Hermes Agent executable_relative_path 必須位於 home/bin/hermes.exe。");
+
+        var localHermes = LocalRuntime["hermes"] as JsonObject
+                          ?? throw new InvalidDataException("local_runtime.hermes 缺少 launcher 連接設定。");
+        var profileHome = ResolveManifestRelativePath(installRoot, ReadString(localHermes, "home_relative_path"), "local_runtime.hermes.home_relative_path");
+        _ = ResolveManifestRelativePath(installRoot, ReadString(localHermes, "config_relative_path"), "local_runtime.hermes.config_relative_path");
+        if (string.Equals(profileHome, home, StringComparison.OrdinalIgnoreCase)
+            || IsPathInside(home, profileHome)
+            || IsPathInside(profileHome, home))
+            throw new InvalidDataException("每個 launcher Hermes profile home 必須和 Hermes Core home 分開。");
+        _ = ReadString(localHermes, "start_script");
+        _ = ReadString(localHermes, "smoke_script");
+    }
+
+    private static string ResolveManifestRelativePath(string root, string path, string label)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path)) throw new InvalidDataException($"{label} 必須是安裝目錄內的相對路徑。");
+        var fullPath = Path.GetFullPath(Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)));
+        var rootPrefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"{label} 不可逸出安裝目錄。");
+        return fullPath;
+    }
+
+    private static bool IsPathInside(string parent, string child)
+        => child.StartsWith(Path.TrimEndingDirectorySeparator(parent) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private void ValidateModelExtension()
     {
@@ -139,6 +198,22 @@ internal sealed class DistributionManifest
 
     public DownloadAsset GetAsset(string id) => Assets.SingleOrDefault(asset => asset.Id == id)
                                                      ?? throw new InvalidDataException($"GitHub manifest 缺少 asset: {id}");
+}
+
+internal sealed class HermesAgentSettings
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; init; }
+    [JsonPropertyName("installation_scope")] public string InstallationScope { get; init; } = "";
+    [JsonPropertyName("path_policy")] public string PathPolicy { get; init; } = "";
+    [JsonPropertyName("source_repository")] public string SourceRepository { get; init; } = "";
+    [JsonPropertyName("source_commit")] public string SourceCommit { get; init; } = "";
+    [JsonPropertyName("bootstrap_asset_id")] public string BootstrapAssetId { get; init; } = "";
+    [JsonPropertyName("home_relative_path")] public string HomeRelativePath { get; init; } = "";
+    [JsonPropertyName("install_directory_relative_path")] public string InstallDirectoryRelativePath { get; init; } = "";
+    [JsonPropertyName("executable_relative_path")] public string ExecutableRelativePath { get; init; } = "";
+    [JsonPropertyName("estimated_install_bytes")] public long EstimatedInstallBytes { get; init; }
+    [JsonPropertyName("skip_browser_tools")] public bool SkipBrowserTools { get; init; }
+    [JsonPropertyName("skip_computer_use_tools")] public bool SkipComputerUseTools { get; init; }
 }
 
 internal sealed class DownloadAsset

@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "version": "1.0.0",
+  "schema_version": 2,
+  "version": "1.0.0-preview.3",
   "channel": "stable",
   "hardware_profiles_url": "../profiles/hardware-profiles.json",
   "disk_reserve_bytes": 1000000000,
@@ -94,6 +94,17 @@
       "archive_format": "none",
       "revision": "947a80cd1d3b4f9a97417025e6c2c62223571287",
       "license": "Apache-2.0"
+    },
+    {
+      "id": "hermes_install_script",
+      "kind": "hermes-bootstrap",
+      "url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/d6284c675ea86ff746c5565e171e4877462dafc1/scripts/install.ps1",
+      "size_bytes": 74252,
+      "sha256": "e8b0e5d378d005a733e2750af2727f0bba86378ac9bdb79fc45d06dfe7f36c97",
+      "target_relative_path": "runtime/hermes-bootstrap/install.ps1",
+      "archive_format": "none",
+      "revision": "d6284c675ea86ff746c5565e171e4877462dafc1",
+      "license": "MIT"
     }
   ],
   "model_registry": {
@@ -404,5 +415,19 @@
       "start_script": "local/start-hermes-local.ps1",
       "smoke_script": "local/test-hermes-local.ps1"
     }
+  },
+  "hermes_agent": {
+    "enabled": true,
+    "installation_scope": "per_user",
+    "path_policy": "absolute_only",
+    "source_repository": "NousResearch/hermes-agent",
+    "source_commit": "d6284c675ea86ff746c5565e171e4877462dafc1",
+    "bootstrap_asset_id": "hermes_install_script",
+    "home_relative_path": "runtime/hermes-core-home",
+    "install_directory_relative_path": "runtime/hermes-agent",
+    "executable_relative_path": "runtime/hermes-core-home/bin/hermes.exe",
+    "estimated_install_bytes": 4294967296,
+    "skip_browser_tools": true,
+    "skip_computer_use_tools": true
   }
 }
